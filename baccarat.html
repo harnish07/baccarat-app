@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Baccarat Bet Helper (1-3-7-15 / BPBB)</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    body { margin: 0; background:#0b0f14; color:#e9eef5; }
+    .wrap { max-width: 900px; margin: 0 auto; padding: 18px; }
+    .card { background:#121826; border:1px solid #1f2a3a; border-radius: 14px; padding: 16px; margin-bottom: 14px; }
+    h1 { font-size: 20px; margin: 0 0 10px; }
+    h2 { font-size: 16px; margin: 0 0 10px; color:#cfe0ff; }
+    .row { display:flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    label { font-size: 14px; color:#b8c4d6; }
+    input[type="number"]{
+      background:#0e1420; color:#e9eef5; border:1px solid #273449; border-radius: 10px;
+      padding: 10px 12px; font-size: 16px; width: 160px;
+    }
+    button{
+      background:#1a2435; color:#e9eef5; border:1px solid #2b3a54; border-radius: 12px;
+      padding: 10px 12px; font-size: 16px; cursor: pointer;
+    }
+    button:hover { filter: brightness(1.08); }
+    .win { background:#12331f; border-color:#1f6b3c; }
+    .loss { background:#3a1616; border-color:#8b2a2a; }
+    .danger { background:#2b1a1a; border-color:#5c2a2a; }
+    .muted { color:#b8c4d6; font-size: 13px; }
+    .big {
+      font-size: 22px; font-weight: 750; letter-spacing: .2px;
+      padding: 12px; border-radius: 12px; background:#0e1420; border:1px dashed #2b3a54;
+    }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 10px; border-bottom: 1px solid #1f2a3a; font-size: 14px; }
+    th { color:#b8c4d6; font-weight: 600; }
+    .pill { display:inline-block; padding: 2px 10px; border-radius: 999px; border:1px solid #2b3a54; background:#0e1420; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Baccarat Bet Helper</h1>
+      <div class="muted">Strategy: <span class="pill">1–3–7–15</span> • Side pattern: <span class="pill">B P B B</span> (repeats)</div>
+    </div>
+
+    <div class="card">
+      <h2>Settings</h2>
+      <div class="row">
+        <label for="baseBet">Base bet</label>
+        <input id="baseBet" type="number" min="1" step="1" />
+        <button id="saveBase">Save</button>
+        <span class="muted">Saved in your browser</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Next bet</h2>
+      <div id="nextBet" class="big">—</div>
+      <div class="muted" id="stateLine" style="margin-top:8px;"></div>
+
+      <div class="row" style="margin-top:12px;">
+        <button class="win" id="btnWin">Win</button>
+        <button class="loss" id="btnLoss">Loss</button>
+        <button id="btnUndo">Undo last</button>
+        <button class="danger" id="btnReset">Reset session</button>
+      </div>
+      <div class="muted" style="margin-top:10px;">
+        Tap <b>Win</b> or <b>Loss</b> after each hand. The app updates your next recommendation.
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>History (latest 20)</h2>
+      <div class="muted" id="historyEmpty">No hands logged yet.</div>
+      <div style="overflow:auto;">
+        <table id="historyTable" style="display:none;">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Bet</th>
+              <th>Amount</th>
+              <th>Result</th>
+              <th>Step</th>
+              <th>Time</th>
+            </tr>
+          </thead>
+          <tbody id="historyBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const STEPS = [1, 3, 7, 15];
+  const PATTERN = ["B", "P", "B", "B"];
+  const KEY = "baccarat_helper_v1";
+
+  const defaultState = { baseBet: 10, handIndex: 0, stepIndex: 0, history: [] };
+
+  function loadState() {
+    try {
+      const raw = localStorage.getItem(KEY);
+      if (!raw) return structuredClone(defaultState);
+      const parsed = JSON.parse(raw);
+      return { ...structuredClone(defaultState), ...parsed };
+    } catch {
+      return structuredClone(defaultState);
+    }
+  }
+
+  function saveState() { localStorage.setItem(KEY, JSON.stringify(state)); }
+
+  function clampBaseBet(n) {
+    const x = Number(n);
+    if (!Number.isFinite(x) || x <= 0) return 1;
+    return Math.floor(x);
+  }
+
+  function currentRecommendation() {
+    const side = PATTERN[state.handIndex % PATTERN.length];
+    const mult = STEPS[state.stepIndex];
+    const amount = clampBaseBet(state.baseBet) * mult;
+    return { side, mult, amount };
+  }
+
+  function formatSide(s) { return s === "B" ? "Banker" : "Player"; }
+
+  function updateUI() {
+    baseBetEl.value = state.baseBet;
+    const rec = currentRecommendation();
+    nextBetEl.textContent = `${formatSide(rec.side)} — $${rec.amount} (base $${state.baseBet} × ${rec.mult})`;
+    stateLineEl.textContent =
+      `Hand #${state.handIndex + 1} next • Step ${state.stepIndex + 1}/${STEPS.length} • Pattern position ${(state.handIndex % PATTERN.length) + 1}/${PATTERN.length}`;
+    renderHistory();
+  }
+
+  function renderHistory() {
+    const hist = state.history.slice(-20);
+    historyBodyEl.innerHTML = "";
+
+    if (hist.length === 0) {
+      historyEmptyEl.style.display = "block";
+      historyTableEl.style.display = "none";
+      return;
+    }
+
+    historyEmptyEl.style.display = "none";
+    historyTableEl.style.display = "table";
+
+    hist.forEach((h) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${h.handNumber}</td>
+        <td>${formatSide(h.betSide)}</td>
+        <td>$${h.betAmount}</td>
+        <td>${h.result}</td>
+        <td>${h.stepLabel}</td>
+        <td>${new Date(h.timestamp).toLocaleString()}</td>
+      `;
+      historyBodyEl.appendChild(tr);
+    });
+  }
+
+  function logResult(result) {
+    const rec = currentRecommendation();
+    state.history.push({
+      handNumber: state.handIndex + 1,
+      betSide: rec.side,
+      betAmount: rec.amount,
+      result,
+      stepLabel: `${state.stepIndex + 1}/${STEPS.length} (×${rec.mult})`,
+      prevStepIndex: state.stepIndex,
+      prevHandIndex: state.handIndex,
+      timestamp: Date.now()
+    });
+
+    state.handIndex += 1;
+    state.stepIndex = (result === "W")
+      ? Math.min(state.stepIndex + 1, STEPS.length - 1)
+      : 0;
+
+    saveState();
+    updateUI();
+  }
+
+  function undoLast() {
+    const last = state.history.pop();
+    if (!last) return;
+    state.handIndex = last.prevHandIndex;
+    state.stepIndex = last.prevStepIndex;
+    saveState();
+    updateUI();
+  }
+
+  function resetSession() {
+    state.handIndex = 0;
+    state.stepIndex = 0;
+    state.history = [];
+    saveState();
+    updateUI();
+  }
+
+  const baseBetEl = document.getElementById("baseBet");
+  const saveBaseBtn = document.getElementById("saveBase");
+  const nextBetEl = document.getElementById("nextBet");
+  const stateLineEl = document.getElementById("stateLine");
+
+  const btnWin = document.getElementById("btnWin");
+  const btnLoss = document.getElementById("btnLoss");
+  const btnUndo = document.getElementById("btnUndo");
+  const btnReset = document.getElementById("btnReset");
+
+  const historyEmptyEl = document.getElementById("historyEmpty");
+  const historyTableEl = document.getElementById("historyTable");
+  const historyBodyEl = document.getElementById("historyBody");
+
+  let state = loadState();
+  state.baseBet = clampBaseBet(state.baseBet);
+
+  saveBaseBtn.addEventListener("click", () => {
+    state.baseBet = clampBaseBet(baseBetEl.value);
+    saveState();
+    updateUI();
+  });
+
+  btnWin.addEventListener("click", () => logResult("W"));
+  btnLoss.addEventListener("click", () => logResult("L"));
+  btnUndo.addEventListener("click", undoLast);
+  btnReset.addEventListener("click", resetSession);
+
+  updateUI();
+})();
+</script>
+</body>
+</html>
