@@ -43,7 +43,7 @@
       <div class="muted">
         Amount: 1–3–7–15–31–63–127–255–511–1023–2047–4095–8191<br/>
         Pattern: B P B B P B P (repeat)<br/>
-        Rule: Loss → advance, Win → reset
+        Rule: <b>Loss → advance</b>, <b>Win → reset</b>
       </div>
     </div>
 
@@ -51,9 +51,10 @@
       <h2>Settings</h2>
       <div class="row">
         <label for="baseBet">Base bet</label>
-        <input id="baseBet" type="number" min="1" step="1" />
+        <input id="baseBet" type="number" min="0.01" step="0.01" />
         <button id="saveBase">Save</button>
       </div>
+      <div class="muted">You can use decimals like 0.2</div>
     </div>
 
     <div class="card">
@@ -70,16 +71,18 @@
     </div>
 
     <div class="card">
-      <h2>History</h2>
+      <h2>History (latest 30)</h2>
       <div class="muted" id="historyEmpty">No hands yet.</div>
-      <table id="historyTable" style="display:none;">
-        <thead>
-          <tr>
-            <th>#</th><th>Bet</th><th>Amount</th><th>Result</th><th>Step</th><th>Pattern</th>
-          </tr>
-        </thead>
-        <tbody id="historyBody"></tbody>
-      </table>
+      <div style="overflow:auto;">
+        <table id="historyTable" style="display:none;">
+          <thead>
+            <tr>
+              <th>#</th><th>Bet</th><th>Amount</th><th>Result</th><th>Amount step</th><th>Pattern pos</th><th>Time</th>
+            </tr>
+          </thead>
+          <tbody id="historyBody"></tbody>
+        </table>
+      </div>
     </div>
   </div>
 
@@ -87,87 +90,143 @@
 (() => {
   const AMOUNT_STEPS = [1,3,7,15,31,63,127,255,511,1023,2047,4095,8191];
   const SIDE_PATTERN = ["B","P","B","B","P","B","P"];
-  const KEY = "baccarat_custom_v1";
+  const KEY = "baccarat_custom_v3_decimal";
 
-  const defaultState = { baseBet: 10, hand: 0, a: 0, p: 0, history: [] };
+  const defaultState = { baseBet: 0.2, hand: 0, a: 0, p: 0, history: [] };
 
+  function safeParse(raw) { try { return JSON.parse(raw); } catch { return null; } }
   function load() {
-    try { return { ...defaultState, ...JSON.parse(localStorage.getItem(KEY)) }; }
-    catch { return structuredClone(defaultState); }
+    const saved = safeParse(localStorage.getItem(KEY));
+    return { ...defaultState, ...(saved || {}) };
   }
-  function save(){ localStorage.setItem(KEY, JSON.stringify(state)); }
-  function clamp(n){ n=Number(n); return (!n||n<1)?1:Math.floor(n); }
+  function save() { localStorage.setItem(KEY, JSON.stringify(state)); }
 
-  function rec(){
-    const side = SIDE_PATTERN[state.p % SIDE_PATTERN.length];
-    const mult = AMOUNT_STEPS[Math.min(state.a, AMOUNT_STEPS.length-1)];
-    return { side, mult, amount: clamp(state.baseBet)*mult };
+  function clamp(n){
+    const x = Number(n);
+    if (!Number.isFinite(x) || x <= 0) return defaultState.baseBet;
+    return Math.round(x * 100) / 100; // keep 2 decimals
   }
-  function sideName(s){ return s==="B"?"Banker":"Player"; }
+  function sideName(s){ return s==="B" ? "Banker" : "Player"; }
+
+  function recommendation(){
+    const side = SIDE_PATTERN[state.p % SIDE_PATTERN.length];
+    const mult = AMOUNT_STEPS[Math.min(state.a, AMOUNT_STEPS.length - 1)];
+    const amount = clamp(state.baseBet) * mult;
+    return { side, mult, amount: Math.round(amount * 100) / 100 };
+  }
 
   function update(){
     baseBetEl.value = state.baseBet;
-    const r = rec();
-    nextBetEl.textContent = `${sideName(r.side)} — $${r.amount} (x${r.mult})`;
+
+    const r = recommendation();
+    nextBetEl.textContent = `${sideName(r.side)} — $${r.amount} (base $${state.baseBet} × ${r.mult})`;
+
+    const stepShown = Math.min(state.a, AMOUNT_STEPS.length - 1) + 1;
+    const patShown = (state.p % SIDE_PATTERN.length) + 1;
     stateLineEl.textContent =
-      `Next hand ${state.hand+1} • Amount step ${Math.min(state.a+1,AMOUNT_STEPS.length)}/${AMOUNT_STEPS.length} • Pattern ${(state.p%SIDE_PATTERN.length)+1}/${SIDE_PATTERN.length}`;
+      `Next hand ${state.hand + 1} • Amount step ${stepShown}/${AMOUNT_STEPS.length} • Pattern position ${patShown}/${SIDE_PATTERN.length}`;
+
     render();
   }
 
   function render(){
     const h = state.history.slice(-30);
-    historyBodyEl.innerHTML="";
-    if(!h.length){ historyEmptyEl.style.display="block"; historyTableEl.style.display="none"; return; }
-    historyEmptyEl.style.display="none"; historyTableEl.style.display="table";
-    h.forEach(x=>{
-      const tr=document.createElement("tr");
-      tr.innerHTML=`<td>${x.n}</td><td>${sideName(x.s)}</td><td>$${x.amt}</td><td>${x.r}</td><td>${x.as}</td><td>${x.ps}</td>`;
+    historyBodyEl.innerHTML = "";
+    if (!h.length) {
+      historyEmptyEl.style.display = "block";
+      historyTableEl.style.display = "none";
+      return;
+    }
+    historyEmptyEl.style.display = "none";
+    historyTableEl.style.display = "table";
+
+    h.forEach(x => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${x.n}</td>
+        <td>${sideName(x.s)}</td>
+        <td>$${x.amt}</td>
+        <td>${x.r}</td>
+        <td>${x.as}</td>
+        <td>${x.ps}</td>
+        <td>${new Date(x.t).toLocaleString()}</td>
+      `;
       historyBodyEl.appendChild(tr);
     });
   }
 
-  function log(r){
-    const x=rec();
-    const as = Math.min(state.a+1,AMOUNT_STEPS.length);
-    const ps = (state.p%SIDE_PATTERN.length)+1;
+  function log(result){
+    const r = recommendation();
+    const asNum = Math.min(state.a, AMOUNT_STEPS.length - 1) + 1;
+    const psNum = (state.p % SIDE_PATTERN.length) + 1;
+
     state.history.push({
-      n: state.hand+1, s:x.side, amt:x.amount, r,
-      as: `${as}/${AMOUNT_STEPS.length}`, ps: `${ps}/${SIDE_PATTERN.length}`,
-      prev:{...state}
+      n: state.hand + 1,
+      s: r.side,
+      amt: r.amount,
+      r: result,
+      as: `${asNum}/${AMOUNT_STEPS.length} (×${r.mult})`,
+      ps: `${psNum}/${SIDE_PATTERN.length}`,
+      t: Date.now(),
+      prevHand: state.hand,
+      prevA: state.a,
+      prevP: state.p,
+      prevBase: state.baseBet
     });
-    state.hand++;
-    if(r==="W"){ state.a=0; state.p=0; }
-    else{ state.a=Math.min(state.a+1,AMOUNT_STEPS.length-1); state.p++; }
-    save(); update();
+
+    state.hand += 1;
+
+    if (result === "W") {
+      state.a = 0;
+      state.p = 0;
+    } else {
+      state.a = Math.min(state.a + 1, AMOUNT_STEPS.length - 1);
+      state.p = state.p + 1;
+    }
+
+    save();
+    update();
   }
 
   function undo(){
-    const last=state.history.pop(); if(!last) return;
-    state=last.prev; save(); update();
+    const last = state.history.pop();
+    if (!last) return;
+    state.hand = last.prevHand;
+    state.a = last.prevA;
+    state.p = last.prevP;
+    state.baseBet = last.prevBase;
+    save();
+    update();
   }
+
   function reset(){
-    state=structuredClone(defaultState); save(); update();
+    state = { ...defaultState, history: [] };
+    save();
+    update();
   }
 
-  let state = load(); state.baseBet = clamp(state.baseBet);
+  const baseBetEl = document.getElementById("baseBet");
+  const saveBaseBtn = document.getElementById("saveBase");
+  const nextBetEl = document.getElementById("nextBet");
+  const stateLineEl = document.getElementById("stateLine");
 
-  const baseBetEl=document.getElementById("baseBet");
-  const saveBaseBtn=document.getElementById("saveBase");
-  const nextBetEl=document.getElementById("nextBet");
-  const stateLineEl=document.getElementById("stateLine");
-  const btnWin=document.getElementById("btnWin");
-  const btnLoss=document.getElementById("btnLoss");
-  const btnUndo=document.getElementById("btnUndo");
-  const btnReset=document.getElementById("btnReset");
-  const historyEmptyEl=document.getElementById("historyEmpty");
-  const historyTableEl=document.getElementById("historyTable");
-  const historyBodyEl=document.getElementById("historyBody");
+  const btnWin = document.getElementById("btnWin");
+  const btnLoss = document.getElementById("btnLoss");
+  const btnUndo = document.getElementById("btnUndo");
+  const btnReset = document.getElementById("btnReset");
 
-  saveBaseBtn.onclick=()=>{ state.baseBet=clamp(baseBetEl.value); save(); update(); };
-  btnWin.onclick=()=>log("W");
-  btnLoss.onclick=()=>log("L");
-  btnUndo.onclick=undo;
-  btnReset.onclick=reset;
+  const historyEmptyEl = document.getElementById("historyEmpty");
+  const historyTableEl = document.getElementById("historyTable");
+  const historyBodyEl = document.getElementById("historyBody");
+
+  let state = load();
+  state.baseBet = clamp(state.baseBet);
+
+  saveBaseBtn.onclick = () => { state.baseBet = clamp(baseBetEl.value); save(); update(); };
+  btnWin.onclick = () => log("W");
+  btnLoss.onclick = () => log("L");
+  btnUndo.onclick = undo;
+  btnReset.onclick = reset;
 
   update();
 })();
