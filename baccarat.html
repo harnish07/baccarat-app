@@ -41,9 +41,14 @@
     <div class="card">
       <h1>Baccarat Bet Helper</h1>
       <div class="muted">
-        Blocks: <span class="pill">15–31–63</span> then <span class="pill">127–255–511</span> then …<br/>
-        Sides per block: <span class="pill">B P B</span><br/>
-        If lose all 3 → show <b>B</b> with <b>$0</b> until a Win, then move to next block.
+        Amount blocks:
+        <span class="pill">1–3–7</span> →
+        <span class="pill">15–31–63</span> →
+        <span class="pill">127–255–511</span> →
+        <span class="pill">1023–2047–4095</span><br/>
+        Side pattern forever: <span class="pill">B P B B P B P</span> (repeat)<br/>
+        Rule: After <b>3 straight losses</b> → show <b>$0</b> from the 4th hand onward until you press <b>Win</b>.<br/>
+        NEW: Win in $0 mode → next block AND reset pattern to start.
       </div>
     </div>
 
@@ -54,7 +59,7 @@
         <input id="baseBet" type="number" min="0.2" step="0.01" />
         <button id="saveBase">Save</button>
       </div>
-      <div class="muted">Minimum base bet: $0.20 • Decimals allowed (e.g., 0.2)</div>
+      <div class="muted">Minimum base bet: $0.20 • Decimals allowed</div>
     </div>
 
     <div class="card">
@@ -71,13 +76,13 @@
     </div>
 
     <div class="card">
-      <h2>History (latest 30)</h2>
+      <h2>History (latest 40)</h2>
       <div class="muted" id="historyEmpty">No hands yet.</div>
       <div style="overflow:auto;">
         <table id="historyTable" style="display:none;">
           <thead>
             <tr>
-              <th>#</th><th>Bet</th><th>Amount</th><th>Result</th><th>Mode</th><th>Block</th><th>Pos</th><th>Time</th>
+              <th>#</th><th>Side</th><th>Amount</th><th>Result</th><th>Mode</th><th>Block</th><th>Loss streak</th><th>Pattern pos</th><th>Time</th>
             </tr>
           </thead>
           <tbody id="historyBody"></tbody>
@@ -88,32 +93,24 @@
 
 <script>
 (() => {
-  // Full ladder available (we'll start at 15 and step through in blocks of 3)
-  const AMOUNT_STEPS = [1,3,7,15,31,63,127,255,511,1023,2047,4095,8191];
+  const BLOCKS = [
+    [1, 3, 7],
+    [15, 31, 63],
+    [127, 255, 511],
+    [1023, 2047, 4095],
+  ];
 
-  // Your pattern includes BPBBPBP, but for "next 3 streak" you asked for B P B (first 3).
-  const THREE_SIDES = ["B","P","B"];
-  const SKIP_SIDE = "B"; // the "4th bet" side after B P B is B
-
-  const START_INDEX = AMOUNT_STEPS.indexOf(15); // start block at 15
-  const KEY = "baccarat_blocks_v1";
+  const PATTERN = ["B","P","B","B","P","B","P"]; // repeats forever
+  const KEY = "baccarat_pattern_skip_v2";
 
   const defaultState = {
     baseBet: 0.2,
     hand: 0,
-
-    // blockStart points to the first multiplier in the current 3-bet block
-    blockStart: START_INDEX,
-
-    // pos 0..2 inside the block
-    pos: 0,
-
-    // how many losses occurred inside this block (0..3)
-    lossesInBlock: 0,
-
-    // when true: show $0 until a Win
-    skipMode: false,
-
+    patternIndex: 0,
+    blockIndex: 0,
+    amountPos: 0,     // 0..2 in current block while betting
+    lossStreak: 0,    // consecutive losses (triggers skip)
+    skipMode: false,  // $0 until win
     history: []
   };
 
@@ -130,46 +127,61 @@
   function money(n){ return (Math.round(n * 100) / 100).toFixed(2); }
   function sideName(s){ return s === "B" ? "Banker" : "Player"; }
 
-  function currentBlockTriplet(){
-    // returns [m1,m2,m3] or null if we run out
-    const i = state.blockStart;
-    if (i < 0 || i + 2 >= AMOUNT_STEPS.length) return null;
-    return [AMOUNT_STEPS[i], AMOUNT_STEPS[i+1], AMOUNT_STEPS[i+2]];
-  }
+  function currentSide(){ return PATTERN[state.patternIndex % PATTERN.length]; }
+  function currentBlock(){ return BLOCKS[state.blockIndex] || null; }
 
   function recommendation(){
-    const block = currentBlockTriplet();
-    if (!block) return { side: "B", mult: 0, amount: 0, note: "No more steps" };
+    const side = currentSide();
+    const block = currentBlock();
+
+    if (!block) return { side, amount: 0, mult: 0, blockText: "DONE", mode: "DONE" };
 
     if (state.skipMode) {
-      return { side: SKIP_SIDE, mult: 0, amount: 0, note: "SKIP ($0) until WIN" };
+      return { side, amount: 0, mult: 0, blockText: block.join("-"), mode: "SKIP ($0) until WIN" };
     }
 
-    const mult = block[state.pos];
-    const side = THREE_SIDES[state.pos];
+    const mult = block[state.amountPos];
     const amount = clampBase(state.baseBet) * mult;
-    return { side, mult, amount: Math.round(amount * 100) / 100, note: "" };
+    return { side, amount: Math.round(amount * 100) / 100, mult, blockText: block.join("-"), mode: "BET" };
+  }
+
+  function snapshot(){
+    return {
+      baseBet: state.baseBet,
+      hand: state.hand,
+      patternIndex: state.patternIndex,
+      blockIndex: state.blockIndex,
+      amountPos: state.amountPos,
+      lossStreak: state.lossStreak,
+      skipMode: state.skipMode
+    };
+  }
+  function restore(s){
+    state.baseBet = s.baseBet;
+    state.hand = s.hand;
+    state.patternIndex = s.patternIndex;
+    state.blockIndex = s.blockIndex;
+    state.amountPos = s.amountPos;
+    state.lossStreak = s.lossStreak;
+    state.skipMode = s.skipMode;
   }
 
   function update(){
     baseBetEl.value = state.baseBet;
 
-    const block = currentBlockTriplet();
     const r = recommendation();
-
-    const blockText = block ? block.join("-") : "—";
-    const modeText = state.skipMode ? "SKIP MODE" : "BET MODE";
     const amountText = r.amount === 0 ? "$0.00 (skip)" : `$${money(r.amount)}`;
+    const patPos = (state.patternIndex % PATTERN.length) + 1;
 
     nextBetEl.textContent = `${sideName(r.side)} — ${amountText}${r.mult ? ` (×${r.mult})` : ""}`;
     stateLineEl.textContent =
-      `Mode: ${modeText} • Block: ${blockText} • Position: ${state.pos+1}/3 • Losses in block: ${state.lossesInBlock}/3`;
+      `Mode: ${r.mode} • Pattern pos ${patPos}/${PATTERN.length} • Block: ${r.blockText} • Loss streak: ${state.lossStreak} • Amount pos: ${state.amountPos+1}/3`;
 
     render();
   }
 
   function render(){
-    const h = state.history.slice(-30);
+    const h = state.history.slice(-40);
     historyBodyEl.innerHTML = "";
     if (!h.length) {
       historyEmptyEl.style.display = "block";
@@ -183,97 +195,77 @@
       const tr = document.createElement("tr");
       tr.innerHTML = `
         <td>${x.n}</td>
-        <td>${sideName(x.s)}</td>
-        <td>$${money(x.amt)}</td>
-        <td>${x.r}</td>
+        <td>${sideName(x.side)}</td>
+        <td>$${money(x.amount)}</td>
+        <td>${x.result}</td>
         <td>${x.mode}</td>
         <td>${x.block}</td>
-        <td>${x.pos}</td>
+        <td>${x.lossStreak}</td>
+        <td>${x.patPos}</td>
         <td>${new Date(x.t).toLocaleString()}</td>
       `;
       historyBodyEl.appendChild(tr);
     });
   }
 
-  function snapshotForUndo(){
-    return {
-      hand: state.hand,
-      blockStart: state.blockStart,
-      pos: state.pos,
-      lossesInBlock: state.lossesInBlock,
-      skipMode: state.skipMode,
-      baseBet: state.baseBet
-    };
-  }
-
-  function applyUndo(snap){
-    state.hand = snap.hand;
-    state.blockStart = snap.blockStart;
-    state.pos = snap.pos;
-    state.lossesInBlock = snap.lossesInBlock;
-    state.skipMode = snap.skipMode;
-    state.baseBet = snap.baseBet;
-  }
-
-  function log(result){
+  function step(result){
     const r = recommendation();
-    const block = currentBlockTriplet();
-    const blockText = block ? block.join("-") : "—";
+    const prev = snapshot();
+    const patPosBefore = (state.patternIndex % PATTERN.length) + 1;
 
     state.history.push({
       n: state.hand + 1,
-      s: r.side,
-      amt: r.amount,
-      r: result,
+      side: r.side,
+      amount: r.amount,
+      result,
       mode: state.skipMode ? "SKIP" : "BET",
-      block: blockText,
-      pos: state.skipMode ? "—" : `${state.pos+1}/3`,
+      block: r.blockText,
+      lossStreak: state.lossStreak,
+      patPos: `${patPosBefore}/${PATTERN.length}`,
       t: Date.now(),
-      prev: snapshotForUndo()
+      prev
     });
 
+    // advance counters for next display
     state.hand += 1;
+    state.patternIndex += 1;
 
-    // --- Core rules ---
     if (state.skipMode) {
-      // In $0 skip mode: do NOTHING on Loss; on Win -> move to next block of 3
+      // Loss does nothing. WIN ends skip => next block + reset pattern to start
       if (result === "W") {
         state.skipMode = false;
-        state.lossesInBlock = 0;
-        state.pos = 0;
-        state.blockStart = state.blockStart + 3; // next block start
+        state.lossStreak = 0;
+        state.amountPos = 0;
+        state.blockIndex = Math.min(state.blockIndex + 1, BLOCKS.length);
+
+        // RESET PATTERN TO START (so next recommendation starts at pattern position 1)
+        state.patternIndex = 0;
       }
       save(); update(); return;
     }
 
-    // BET mode:
     if (result === "W") {
-      // Win during the 3-bet block: restart the SAME block from the beginning
-      state.pos = 0;
-      state.lossesInBlock = 0;
+      state.lossStreak = 0;
+      state.amountPos = 0;
       save(); update(); return;
     }
 
-    // Loss during block:
-    state.lossesInBlock += 1;
+    // Loss:
+    state.lossStreak += 1;
+    state.amountPos = Math.min(state.amountPos + 1, 2);
 
-    if (state.lossesInBlock >= 3) {
-      // After losing 15-31-63 (3 losses): enter skip mode ($0) until a Win
+    // After 3 straight losses => skip mode from the "4th"
+    if (state.lossStreak >= 3) {
       state.skipMode = true;
-      // keep pos at 0 just for cleanliness
-      state.pos = 0;
-      save(); update(); return;
     }
 
-    // Move to next bet inside the 3-bet block
-    state.pos = Math.min(state.pos + 1, 2);
     save(); update();
   }
 
   function undo(){
     const last = state.history.pop();
     if (!last) return;
-    applyUndo(last.prev);
+    restore(last.prev);
     save();
     update();
   }
@@ -302,8 +294,8 @@
   state.baseBet = clampBase(state.baseBet);
 
   saveBaseBtn.onclick = () => { state.baseBet = clampBase(baseBetEl.value); save(); update(); };
-  btnWin.onclick = () => log("W");
-  btnLoss.onclick = () => log("L");
+  btnWin.onclick = () => step("W");
+  btnLoss.onclick = () => step("L");
   btnUndo.onclick = undo;
   btnReset.onclick = reset;
 
