@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Baccarat Bet Helper</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    body { margin: 0; background:#0b0f14; color:#e9eef5; }
+    .wrap { max-width: 900px; margin: 0 auto; padding: 18px; }
+    .card { background:#121826; border:1px solid #1f2a3a; border-radius: 14px; padding: 16px; margin-bottom: 14px; }
+    h1 { font-size: 20px; margin: 0 0 10px; }
+    h2 { font-size: 16px; margin: 0 0 10px; color:#cfe0ff; }
+    .row { display:flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    label { font-size: 14px; color:#b8c4d6; }
+    input[type="number"]{
+      background:#0e1420; color:#e9eef5; border:1px solid #273449; border-radius: 10px;
+      padding: 10px 12px; font-size: 16px; width: 160px;
+    }
+    button{
+      background:#1a2435; color:#e9eef5; border:1px solid #2b3a54; border-radius: 12px;
+      padding: 10px 12px; font-size: 16px; cursor: pointer;
+    }
+    button:hover { filter: brightness(1.08); }
+    .banker { background:#12331f; border-color:#1f6b3c; }  /* green-ish */
+    .player { background:#1a2240; border-color:#3a56a6; }  /* blue-ish */
+    .tie { background:#3a2f12; border-color:#8b6a2a; }     /* amber-ish */
+    .danger { background:#2b1a1a; border-color:#5c2a2a; }
+    .muted { color:#b8c4d6; font-size: 13px; }
+    .big {
+      font-size: 22px; font-weight: 750; letter-spacing: .2px;
+      padding: 12px; border-radius: 12px; background:#0e1420; border:1px dashed #2b3a54;
+    }
+    .pill { display:inline-block; padding: 2px 10px; border-radius: 999px; border:1px solid #2b3a54; background:#0e1420; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1>Baccarat Bet Helper</h1>
+    <div class="muted">
+      Amount blocks:
+      <span class="pill">1–3–7</span> →
+      <span class="pill">15–31–63</span> →
+      <span class="pill">127–255–511</span> →
+      <span class="pill">1023–2047–4095</span><br/>
+      Side pattern: <span class="pill">B P B B P B P</span> (repeat)<br/>
+      Rules:
+      <b>Every Win resets pattern</b>.
+      If Win happens on a <b>$ bet</b> → reset back to <b>1–3–7</b>.
+      After <b>3 losses</b> → show <b>$0</b> until Win.
+      <br/><br/>
+      New input: tap the <b>actual result</b> (Banker / Player). App auto-decides Win/Loss.
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Settings</h2>
+    <div class="row">
+      <label for="baseBet">Base bet</label>
+      <input id="baseBet" type="number" min="0.2" step="0.01" />
+      <button id="saveBase">Save</button>
+    </div>
+    <div class="muted">Minimum base bet: $0.20 • Decimals allowed</div>
+  </div>
+
+  <div class="card">
+    <h2>Next bet</h2>
+    <div id="nextBet" class="big">—</div>
+    <div class="muted" id="stateLine" style="margin-top:8px;"></div>
+
+    <div class="row" style="margin-top:12px;">
+      <button class="banker" id="btnBanker">Banker (B)</button>
+      <button class="player" id="btnPlayer">Player (P)</button>
+      <button class="tie" id="btnTie">Tie</button>
+      <button class="danger" id="btnReset">Reset</button>
+    </div>
+
+    <div class="muted" style="margin-top:10px;">
+      Tip: Tap whichever side actually won. If it matches the recommended bet side, it counts as a Win.
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const BLOCKS = [
+    [1,3,7],
+    [15,31,63],
+    [127,255,511],
+    [1023,2047,4095]
+  ];
+  const PATTERN = ["B","P","B","B","P","B","P"];
+  const KEY = "baccarat_rules_v4_result_buttons";
+
+  const defaultState = {
+    baseBet: 0.2,
+    blockIndex: 0,
+    amountPos: 0,     // 0..2 inside block (only used in BET mode)
+    patternIndex: 0,  // 0.. repeats
+    lossStreak: 0,    // consecutive losses
+    skipMode: false   // true => $0 bets until a Win
+  };
+
+  const $ = (id) => document.getElementById(id);
+
+  function load(){
+    try { return { ...defaultState, ...JSON.parse(localStorage.getItem(KEY)) }; }
+    catch { return { ...defaultState }; }
+  }
+  function save(){ localStorage.setItem(KEY, JSON.stringify(state)); }
+
+  function clampBase(n){
+    const x = Number(n);
+    if (!Number.isFinite(x)) return defaultState.baseBet;
+    const v = Math.max(0.2, x);
+    return Math.round(v * 100) / 100;
+  }
+  function money(n){ return (Math.round(n * 100) / 100).toFixed(2); }
+  function sideName(s){ return s === "B" ? "Banker" : "Player"; }
+
+  function rec(){
+    const betSide = PATTERN[state.patternIndex % PATTERN.length];
+    const block = BLOCKS[state.blockIndex];
+
+    if (!block) return { betSide, amount: 0, mult: 0, mode: "DONE", blockText: "DONE" };
+
+    if (state.skipMode) {
+      return { betSide, amount: 0, mult: 0, mode: "SKIP", blockText: block.join("-") };
+    }
+
+    const mult = block[state.amountPos];
+    const amount = clampBase(state.baseBet) * mult;
+    return {
+      betSide,
+      amount: Math.round(amount * 100) / 100,
+      mult,
+      mode: "BET",
+      blockText: block.join("-")
+    };
+  }
+
+  function update(){
+    $("baseBet").value = state.baseBet;
+    const r = rec();
+
+    $("nextBet").textContent =
+      `BET: ${sideName(r.betSide)} — ${r.amount===0 ? "$0.00 (skip)" : "$"+money(r.amount)} ${r.mult ? "(×"+r.mult+")" : ""}`;
+
+    $("stateLine").textContent =
+      `Mode: ${r.mode} • Block: ${r.blockText} • Amount pos: ${state.amountPos+1}/3 • Pattern pos: ${(state.patternIndex%PATTERN.length)+1}/7 • Losses: ${state.lossStreak}`;
+  }
+
+  // Core logic stays same, but now we compute W/L from actual result
+  function applyWL(resultWL, amountWasPositive){
+    if (resultWL === "W") {
+      // Every WIN resets pattern
+      state.patternIndex = 0;
+
+      if (amountWasPositive) {
+        // Win on real $ bet => reset back to first block
+        state.blockIndex = 0;
+        state.amountPos = 0;
+        state.lossStreak = 0;
+        state.skipMode = false;
+        save(); update(); return;
+      }
+
+      // Win in $0 mode => next block
+      if (state.skipMode) {
+        state.skipMode = false;
+        state.lossStreak = 0;
+        state.amountPos = 0;
+        state.blockIndex = Math.min(state.blockIndex + 1, BLOCKS.length);
+        save(); update(); return;
+      }
+
+      // fallback
+      state.lossStreak = 0;
+      state.amountPos = 0;
+      save(); update(); return;
+    }
+
+    // LOSS:
+    state.patternIndex += 1;
+
+    if (state.skipMode) {
+      // stay in skip mode on losses, no amount changes
+      save(); update(); return;
+    }
+
+    state.lossStreak += 1;
+    state.amountPos = Math.min(state.amountPos + 1, 2);
+
+    if (state.lossStreak >= 3) {
+      state.skipMode = true; // $0 from the 4th onward
+    }
+
+    save(); update();
+  }
+
+  function onActualResult(actualSide){
+    const r = rec();
+    if (r.mode === "DONE") return;
+
+    const isWin = (actualSide === r.betSide);
+    const wl = isWin ? "W" : "L";
+    const amountWasPositive = r.amount > 0;
+
+    applyWL(wl, amountWasPositive);
+  }
+
+  function onTie(){
+    // Tie does nothing (no pattern advance, no loss streak change)
+    // If you want tie to advance pattern or be treated as push, tell me.
+    update();
+  }
+
+  let state = load();
+  state.baseBet = clampBase(state.baseBet);
+
+  $("saveBase").onclick = () => { state.baseBet = clampBase($("baseBet").value); save(); update(); };
+  $("btnBanker").onclick = () => onActualResult("B");
+  $("btnPlayer").onclick = () => onActualResult("P");
+  $("btnTie").onclick = () => onTie();
+  $("btnReset").onclick = () => { state = { ...defaultState }; save(); update(); };
+
+  update();
+})();
+</script>
+</body>
+</html>
